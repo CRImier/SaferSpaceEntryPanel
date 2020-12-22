@@ -1,9 +1,12 @@
+import requests
+import network
 from machine import Pin
 from TTP229_BSF import Keypad
 
 ## TODO: docs
 # what to add if you want to support more than one keypad?
 # what to add if you want to support more LEDs?
+#   - just chain more 595 and increase shift_register_count
 
 ######################
 # Hardware definitions
@@ -14,17 +17,22 @@ kp = Keypad(sclk, sdo, inputs=16)
 # we have 3 595 shift registers
 shift_register_count = 3
 
+# 595 SPI interface and pins
+spi = SPI(1, sck=Pin(21), mosi=Pin(13), miso=Pin(12),
+  baudrate=20*1000*1000, polarity=0, phase=0)
+cs = Pin(11, Pin.OUT)
+
 # LEDs connected to GPIOs
 working_led = Pin(2, Pin.OUT)
 
-# LEDs connected to 595 ICs
+# LEDs connected to chained 595 ICs
 # LEDs with two-pin tuple are dual-color LEDs where the color of the LED depends on the voltage polarity applied
 # The only real benefit of those LEDs is that they're physically a single package and they might look better in terms of UX
 # But I like them and I have a small package of those LEDs, so that's why I'm using them, even if it hurts repeatability a bit.
 # Anyway, the code and the wiring allows for other LEDs to be used, with zero code modifications.
 # The dual-color LEDs have to be wired in such a way where setting pin0 to high and pin1 to low would indicate "True" (i.e. green_
 # and setting pin0 to low and pin1 to high would indicate "False" (i.e. red).
-network_act_led = (0, 1)
+led_network_act = (0, 1)
 led_status = (2, 3)
 led_guests = (4, 5)
 led_locations = (6, 7)
@@ -57,12 +65,16 @@ key_clear = 15
 shift_reg_data = bytearray(shift_register_count)
 
 def pin_high(pin):
-    global shift_reg_data
-    pass
+    # set a specific bit high
+    i, bit = divmod(pin, 8)
+    mask = 1 << bit
+    shift_reg_data[i] = shift_reg_data[i]|mask
 
 def pin_low(pin):
-    global shift_reg_data
-    pass
+    # set a specific bit low
+    i, bit = divmod(pin, 8)
+    mask = ~(1 << bit) & 0xff
+    shift_reg_data[i] = shift_reg_data[i]&mask
 
 def disable_led(led):
     if type(led) == int:
@@ -88,7 +100,9 @@ def boolean_switch_led(led, state):
 def update_leds():
     # shifts the LED data out to the 595
     # until this function is called, none of the functions above will actually change the LEDs
-    pass
+    cs.off()
+    spi.write(shift_reg_data)
+    cs.on()
 
 #######################
 # Main keypad algorithm
@@ -107,6 +121,7 @@ states = {"leaving":False, "time":None, "guests":None, "locations":[]}
 def reset_state():
     boolean_switch_led(led_status, False)
     boolean_switch_led(led_submittable, False)
+    disable_led(led_network_act)
     disable_led(led_leaving)
     disable_led(led_guests)
     disable_led(led_locations)
@@ -225,13 +240,25 @@ def process_submit_press():
     if not submittable():
         # data doesn't make sense yet, doing nothing
         return # perhaps we could even blink the red LED at the "submittable" button, but, I guess, that's to be done later.
-    # network interaction code goes here lmao
+    # let's try and submit it
+    
+    result = send_data()
+    
     # TODO XXX etc.
 
 def process_clear_press():
     reset_state()
 
+#################
+# Networking code
+#################
+
+def send_data():
+    return False
+
+############################
 # main loop - key processing
+############################
 
 pressed_key_dict = {i:False for i in range(16)}
 
