@@ -1,12 +1,41 @@
+import json
 import requests
 import network
 from machine import Pin
 from TTP229_BSF import Keypad
 
-## TODO: docs
+## TODO: some docs, perhaps
 # what to add if you want to support more than one keypad?
+
 # what to add if you want to support more LEDs?
 #   - just chain more 595 and increase shift_register_count
+
+# "device working" LED connected to GPIOs
+working_led = Pin(2, Pin.OUT)
+working_led.value(False) # low = LED lit
+
+# let's read the config
+# we get the WiFi SSID, WiFi password, and HTTP endpoint from it
+with open("config.json", "r") as f:
+    config = json.load(f)
+
+ssid = config["ssid"]
+psk = config["psk"]
+endpoint = config["endpoint"]
+
+# setup WiFi - disable built-in AP and enable the STA interface
+
+wlan = network.WLAN(network.AP_IF)
+wlan.active(False)
+
+wlan = network.WLAN(network.STA_IF)
+wlan.active(True)
+
+wlan.connect(ssid, psk)
+
+# useful later on if we need to reconnect to WiFi
+wlan_reset_seconds = 5
+wlan_connect_seconds = 20
 
 ######################
 # Hardware definitions
@@ -21,9 +50,6 @@ shift_register_count = 3
 spi = SPI(1, sck=Pin(21), mosi=Pin(13), miso=Pin(12),
   baudrate=20*1000*1000, polarity=0, phase=0)
 cs = Pin(11, Pin.OUT)
-
-# LEDs connected to GPIOs
-working_led = Pin(2, Pin.OUT)
 
 # LEDs connected to chained 595 ICs
 # LEDs with two-pin tuple are dual-color LEDs where the color of the LED depends on the voltage polarity applied
@@ -125,11 +151,13 @@ def reset_state():
     disable_led(led_leaving)
     disable_led(led_guests)
     disable_led(led_locations)
+    for led in leds_time+leds_guests+leds_locations:
+        disable_led(led)
+    update_leds()
     states["leaving"] = False
     states["time"] = None
     states["guests"] = None
     states["locations"] = []
-    # TODO update_leds(
 
 def determine_submittable():
     # this function determines if the currently input state makes sense and can be submitted
@@ -241,10 +269,12 @@ def process_submit_press():
         # data doesn't make sense yet, doing nothing
         return # perhaps we could even blink the red LED at the "submittable" button, but, I guess, that's to be done later.
     # let's try and submit it
-    
+    boolean_switch_led(led_network_act, True)
     result = send_data()
-    
-    # TODO XXX etc.
+    if not result:
+        boolean_switch_led(led_network_act, False)
+        sleep(1)
+    # TODO: store data and resend at earliest convenience
 
 def process_clear_press():
     reset_state()
@@ -253,7 +283,51 @@ def process_clear_press():
 # Networking code
 #################
 
+# modify this as you see fit lol
+
+def get_request_data():
+    d = {}
+    # take the "states" dict and transform it into something that the endpoint understands
+    d["leaving"] = states["leaving"]
+    # for these three options specifically, the "states" dict uses key pin numbers (for ease of key processing algorithm)
+    # but we need key indices in their dict, essentially:
+    # the input is "key pin number as it's connected to the TTP229 IC", so, could be 3, 10 or 16, depends on the wiring
+    # the output is "index of the time option selected", so, 0, 1 or 2 (as we have 3 time options)
+    # since, of course, the endpoint won't know which key is connected to which time button, and arguably it shouldn't matter.
+    d["time"] = keys_time.index(states["time"])
+    d["guests"] = keys_guests.index(states["guests"])
+    d["locations"] = keys_locations.index(states["locations"])
+    return d
+
 def send_data():
+    led_state = True
+    # if we're currently not connected, let's "power cycle" the WiFi peripheral and try to reconnect
+    if not wlan.isconnected():
+        wlan.active(False)
+        sleep(wlan_reset_seconds)
+        wlan.active(True)
+        wlan.connect(ssid, psk)
+        connect_counter = 0
+        while not wlan.isconnected():
+            led_state = not led_state
+            boolean_switch_led(led_network_act, led_state)
+            sleep(1)
+            connect_counter += 1
+            if connect_counter == wlan_connect_seconds:
+                break
+        if not wlan.isconnected(): return False
+    # presumably, we're connected.
+    boolean_switch_led(led_network_act, True)
+    data = get_request_data()
+    try:
+        r = requests.get(endpoint, data=data)
+    except:
+        boolean_switch_led(led_network_act, False)
+        disable_led(led_working)
+        raise
+    else:
+        if r.status_code == 200:
+            return True
     return False
 
 ############################
