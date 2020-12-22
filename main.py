@@ -336,6 +336,8 @@ def send_data():
 
 pressed_key_dict = {i:False for i in range(16)}
 
+# this loop processes keypresses and calls the functions appropriate for each key
+# that's basically it. I guess later on it could do something else?
 while True:
     # mind you, keypad driver is set to only process a single keypress, but that's okay, as this code might be useful later.
     # we also don't process key release events yet, but we can add initial processing code for them, just in case.
@@ -353,6 +355,8 @@ while True:
             keys_just_released.append(key)
     # now processing separate button types specifically
     for key in keys_just_pressed:
+        # mind you, in single keypress mode, we'll always be only processing one key at a time,
+        # and this code will work for that either way.
         if key == key_leaving or key in keys_time:
             process_status_key(key)
         elif key in keys_guests:
